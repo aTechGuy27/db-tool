@@ -13,6 +13,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 
 import org.slf4j.Logger;
@@ -119,6 +121,7 @@ public class LogToolService {
         }
     }
 
+    // Update the extractLogs method to better handle log pattern matching
     public String extractLogs(LogExtractRequest request) {
         StringBuilder logs = new StringBuilder();
         
@@ -147,6 +150,8 @@ public class LogToolService {
                 
                 // Process each file
                 for (String filePath : files) {
+                    logs.append("File: ").append(filePath).append("\n");
+                    
                     // Download file
                     byte[] fileContent = sftpService.downloadFile(request.getServer(), filePath);
                     
@@ -165,35 +170,12 @@ public class LogToolService {
                     
                     // Find relevant log entries
                     String fpid = request.getFpid();
-                    String[] lines = content.split("\n");
-                    String requiredText = "FileProcessId:" + fpid;
+                    extractLogEntries(content, fpid, logs);
                     
-                    for (int i = 0; i < lines.length; i++) {
-                        if (lines[i].contains(requiredText)) {
-                            int startIndex = i - 1;
-                            int endIndex = i + 1;
-                            
-                            // Find the start of the log entry
-                            while (startIndex >= 0 && !lines[startIndex].contains("**********")) {
-                                startIndex--;
-                            }
-                            
-                            // Find the end of the log entry
-                            while (endIndex < lines.length && !lines[endIndex].contains("**********")) {
-                                endIndex++;
-                            }
-                            
-                            // Extract the log entry
-                            logs.append("**********\n");
-                            for (int j = startIndex + 1; j < endIndex; j++) {
-                                if (!lines[j].trim().isEmpty()) {
-                                    logs.append(lines[j].trim()).append("\n");
-                                }
-                            }
-                            logs.append("**********\n\n");
-                        }
-                    }
+                    logs.append("\n");
                 }
+                
+                logs.append("\n");
             }
             
             return logs.toString();
@@ -201,6 +183,80 @@ public class LogToolService {
             logger.error("Error extracting logs", e);
             return "Error extracting logs: " + e.getMessage();
         }
+    }
+
+    /**
+     * Extract log entries from content based on FileProcessId
+     * @param content Log file content
+     * @param fpid File Process ID to search for
+     * @param logs StringBuilder to append extracted logs
+     */
+    private void extractLogEntries(String content, String fpid, StringBuilder logs) {
+        // Split content by log entry delimiter
+        String[] entries = content.split("\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*");
+        
+        // Keep track of threads and tenant IDs for context
+        Map<String, List<String>> threadContexts = new HashMap<>();
+        
+        for (int i = 0; i < entries.length; i++) {
+            String entry = entries[i].trim();
+            if (entry.isEmpty()) continue;
+            
+            // Add delimiter back for complete log entry
+            String completeEntry = "**********\n" + entry + "\n";
+            
+            // Check if entry contains the FPID directly
+            if (entry.contains("FileProcessId:" + fpid)) {
+                logs.append(completeEntry);
+                
+                // Extract thread for context tracking
+                String thread = extractThread(entry);
+                String tenantId = extractTenantId(entry);
+                
+                if (thread != null && tenantId != null) {
+                    String key = thread + ":" + tenantId;
+                    threadContexts.putIfAbsent(key, new ArrayList<>());
+                    threadContexts.get(key).add(completeEntry);
+                }
+            }
+            // Check for FileProcessId:0 and match with previous context
+            else if (entry.contains("FileProcessId:0") || !entry.contains("FileProcessId:")) {
+                String thread = extractThread(entry);
+                String tenantId = extractTenantId(entry);
+                
+                if (thread != null && tenantId != null) {
+                    String key = thread + ":" + tenantId;
+                    
+                    // If we have previous context for this thread+tenant, this might be related
+                    if (threadContexts.containsKey(key) && !threadContexts.get(key).isEmpty()) {
+                        logs.append(completeEntry);
+                        threadContexts.get(key).add(completeEntry);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Extract thread information from log entry
+     * @param entry Log entry
+     * @return Thread name or null if not found
+     */
+    private String extractThread(String entry) {
+        Pattern pattern = Pattern.compile("Thread:\\s*\\[([^\\]]+)\\]");
+        Matcher matcher = pattern.matcher(entry);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    /**
+     * Extract tenant ID from log entry
+     * @param entry Log entry
+     * @return Tenant ID or null if not found
+     */
+    private String extractTenantId(String entry) {
+        Pattern pattern = Pattern.compile("TenantId:(\\d+|\\-\\d+)");
+        Matcher matcher = pattern.matcher(entry);
+        return matcher.find() ? matcher.group(1) : null;
     }
     
     private String extractGzipContent(byte[] compressedContent) throws IOException {

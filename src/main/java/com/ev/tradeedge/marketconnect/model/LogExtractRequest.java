@@ -8,6 +8,7 @@ public class LogExtractRequest {
     private List<String> services;
     private String server;
     private Map<String, String> timeRange;
+    private boolean includeRelatedThreads = true; // Default to true for backward compatibility
 
     // Getters and setters
     public String getFpid() {
@@ -40,5 +41,13 @@ public class LogExtractRequest {
 
     public void setTimeRange(Map<String, String> timeRange) {
         this.timeRange = timeRange;
+    }
+    
+    public boolean isIncludeRelatedThreads() {
+        return includeRelatedThreads;
+    }
+    
+    public void setIncludeRelatedThreads(boolean includeRelatedThreads) {
+        this.includeRelatedThreads = includeRelatedThreads;
     }
 }
